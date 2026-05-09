@@ -61,7 +61,8 @@ jobs:
       - name: 🔧 Install Dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y zip curl python3
+          sudo apt-get install -y zip curl python3 python3-pip
+          pip3 install --quiet requests
 
       - name: 🔗 Get Download Link
         id: retrieve
@@ -69,8 +70,8 @@ jobs:
           python3 << 'EOF'
           import os, sys, time, re, requests
 
-          URL = os.environ.get('INPUT_URL')
-          FMT = os.environ.get('INPUT_FORMAT')
+          URL  = os.environ.get('INPUT_URL')
+          FMT  = os.environ.get('INPUT_FORMAT')
           QUAL = os.environ.get('INPUT_QUALITY')
 
           is_audio = FMT == 'mp3'
@@ -116,7 +117,7 @@ jobs:
               print("::error::Could not get download link")
               sys.exit(1)
 
-          vid = re.search(r'(?:v=|youtu\.be/)([a-zA-Z0-9_-]{11})', URL)[1]
+          vid   = re.search(r'(?:v=|youtu\.be/)([a-zA-Z0-9_-]{11})', URL)[1]
           clean = re.sub(r'[^a-zA-Z0-9\-_()\[\]]', '_', title.replace(' ', '_'))
           clean = re.sub(r'_+', '_', clean).strip('_')[:70] or vid
           fname = f"{clean}_{vid}_{QUAL}.{FMT}"
@@ -124,13 +125,12 @@ jobs:
           with open(".download_info", "w", encoding="utf-8") as f:
               f.write(f"{dl_url}\n{fname}\n{title}")
 
-          # Correct way to set outputs
           with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
               f.write(f"filename={fname}\n")
               f.write(f"title={title}\n")
           EOF
         env:
-          INPUT_URL: ${{ github.event.inputs.video_url }}
+          INPUT_URL:    ${{ github.event.inputs.video_url }}
           INPUT_FORMAT: ${{ github.event.inputs.output_format == 'mp3 (audio only)' && 'mp3' || 'mp4' }}
           INPUT_QUALITY: ${{ github.event.inputs.desired_quality }}
 
@@ -141,12 +141,11 @@ jobs:
           mkdir -p temp_dl
           echo "Downloading: $FILENAME"
           curl -L --fail --progress-bar -o "temp_dl/$FILENAME" "$DL_URL"
-          echo "filename=$FILENAME" >> $GITHUB_OUTPUT
 
       - name: ✂️ Split Large File (if needed)
         run: |
           FILENAME="${{ steps.retrieve.outputs.filename }}"
-          THRESH_MB=${{ github.event.inputs.max_part_mb }}
+          THRESH_MB="${{ github.event.inputs.max_part_mb }}"
           if [[ "$THRESH_MB" -le 0 ]] || [[ "$THRESH_MB" -gt 1900 ]]; then
             THRESH_MB=1800
           fi
@@ -155,12 +154,12 @@ jobs:
 
           cd temp_dl
           if [ "$FILESIZE" -gt "$THRESH_BYTES" ]; then
-            echo "🔪 Splitting file into ${THRESH_MB}MB parts..."
+            echo "🔪 Splitting into ${THRESH_MB}MB parts..."
             BASE="${FILENAME%.*}"
             zip -r -s "${THRESH_MB}m" "../${BASE}.zip" -- "$FILENAME"
             rm -- "$FILENAME"
           else
-            echo "📦 File is small enough, no splitting needed."
+            echo "📦 No split needed."
             mv -- "$FILENAME" ..
           fi
           cd ..
@@ -172,29 +171,26 @@ jobs:
       - name: 📤 Push to Repository
         if: github.event.inputs.upload_method == 'repository (push to repo)'
         run: |
-          git config user.name "github-actions[bot]"
+          git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           mkdir -p downloads
           mv temp_dl/* downloads/ 2>/dev/null || true
-          mv *.zip downloads/ 2>/dev/null || true
-          
+          mv *.zip      downloads/ 2>/dev/null || true
           git add downloads/
           git commit -m "⬇️ YouTube: ${{ steps.retrieve.outputs.filename }} [skip ci]" || echo "Nothing to commit"
           git push
 
-           - name: 📤 Upload to GitHub Releases
+      - name: 📤 Upload to GitHub Releases
         if: github.event.inputs.upload_method == 'release (GitHub Releases)'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.release_tag || format('yt-{0}', github.run_number) }}
+          tag_name: ${{ github.event.inputs.release_tag != '' && github.event.inputs.release_tag || format('yt-{0}', github.run_number) }}
           name: ${{ format('YouTube - {0}', steps.retrieve.outputs.filename) }}
           body: |
             **📽️ YouTube Download**
 
             **Title:** ${{ steps.retrieve.outputs.title }}
-
             **Original Link:** ${{ github.event.inputs.video_url }}
-
             **Quality:** ${{ github.event.inputs.desired_quality }}
             **Format:** ${{ github.event.inputs.output_format }}
             **Downloaded on:** ${{ steps.get_date.outputs.date }}
